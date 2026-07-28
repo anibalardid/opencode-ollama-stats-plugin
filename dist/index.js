@@ -9,7 +9,7 @@ var CONFIG_PATHS = [
 var SETTINGS_URL = "https://ollama.com/settings";
 var USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Gecko/20100101 Firefox/148.0";
 var SCRAPE_TIMEOUT_MS = 1e4;
-var REFRESH_INTERVAL_MS = 6e4;
+var REFRESH_INTERVAL_MS = 18e4;
 function readYamlCookie(content) {
   const stripped = content.replace(/#[^\n]*/g, "");
   const m = stripped.match(/(?:^|\n)\s*cookie\s*:\s*["']?\s*(.+?)\s*["']?\s*(?:\n|$)/);
@@ -38,7 +38,7 @@ async function resolveCookie() {
   }
   return { error: "no cookie found" };
 }
-var RETRY_DELAYS = [5e3, 15e3, 3e4];
+var RETRY_DELAYS = [6e4, 6e4, 6e4];
 function parseUsageFromHtml(html) {
   const usageRe = /(\d+(?:\.\d+)?)%\s*used/gi;
   const usageMatches = [...html.matchAll(usageRe)];
@@ -130,15 +130,10 @@ var init = false;
 var tui = async (api) => {
   if (init) return;
   init = true;
-  let unsub;
   let sd;
   let timerId;
   let retryTimer;
   const cl = () => {
-    try {
-      unsub?.();
-    } catch {
-    }
     try {
       sd?.();
     } catch {
@@ -157,6 +152,7 @@ var tui = async (api) => {
       const [expanded, setExpanded] = createSignal(
         api.kv?.get?.(KV_EXP, true) !== false
       );
+      let retryAttempt = 0;
       async function refresh() {
         const resolved = await resolveCookie();
         if (!resolved.result) {
@@ -166,10 +162,17 @@ var tui = async (api) => {
         const scraped = await scrapeUsage(resolved.result.cookie);
         if (scraped.error) {
           setState({ kind: "error", msg: scraped.error });
-          scheduleRetry(0);
+          if (timerId) {
+            clearInterval(timerId);
+            timerId = void 0;
+          }
+          scheduleRetry(retryAttempt);
+          retryAttempt++;
           return;
         }
+        retryAttempt = 0;
         setState({ kind: "data", d: scraped.data });
+        if (!timerId) timerId = setInterval(refresh, REFRESH_INTERVAL_MS);
       }
       function scheduleRetry(attempt) {
         if (retryTimer) clearTimeout(retryTimer);
@@ -182,8 +185,6 @@ var tui = async (api) => {
         }, RETRY_DELAYS[attempt]);
       }
       refresh();
-      timerId = setInterval(refresh, REFRESH_INTERVAL_MS);
-      unsub = api.event?.on?.("session.updated", refresh);
       api.slots?.register?.({
         order: 220,
         slots: {
@@ -223,10 +224,10 @@ var tui = async (api) => {
               ] });
             }
             const d = s.d;
-            const sessionRemaining = 100 - d.sessionPercent;
-            const weeklyRemaining = 100 - d.weeklyPercent;
-            const sessionCircle = d.sessionPercent >= 100 ? "\u{1F534} " : d.sessionPercent >= 90 ? "\u{1F7E1} " : "";
-            const weeklyCircle = d.weeklyPercent >= 100 ? "\u{1F534} " : d.weeklyPercent >= 90 ? "\u{1F7E1} " : "";
+            const sessionPct = d.sessionPercent;
+            const weeklyPct = d.weeklyPercent;
+            const sessionCircle = sessionPct >= 100 ? "\u{1F534} " : sessionPct >= 90 ? "\u{1F7E1} " : "";
+            const weeklyCircle = weeklyPct >= 100 ? "\u{1F534} " : weeklyPct >= 90 ? "\u{1F7E1} " : "";
             return /* @__PURE__ */ jsxs("box", { flexDirection: "column", children: [
               /* @__PURE__ */ jsxs(
                 "box",
@@ -246,7 +247,7 @@ var tui = async (api) => {
                     ] }),
                     /* @__PURE__ */ jsxs("text", { fg, children: [
                       sessionCircle,
-                      fmtPct(d.sessionPercent)
+                      fmtPct(sessionPct)
                     ] })
                   ]
                 }
@@ -258,15 +259,14 @@ var tui = async (api) => {
                     "Session"
                   ] }),
                   /* @__PURE__ */ jsxs("text", { fg, children: [
-                    fmtPct(d.sessionPercent),
+                    fmtPct(sessionPct),
                     " used"
                   ] })
                 ] }),
                 /* @__PURE__ */ jsxs("text", { fg, children: [
-                  barStr(sessionRemaining / 100, 8),
+                  barStr(sessionPct / 100, 8),
                   " ",
-                  fmtPct(sessionRemaining),
-                  " free"
+                  fmtPct(sessionPct)
                 ] }),
                 d.sessionReset && /* @__PURE__ */ jsxs("text", { fg: mu, children: [
                   "Reset ",
@@ -278,15 +278,14 @@ var tui = async (api) => {
                     "Weekly"
                   ] }),
                   /* @__PURE__ */ jsxs("text", { fg, children: [
-                    fmtPct(d.weeklyPercent),
+                    fmtPct(weeklyPct),
                     " used"
                   ] })
                 ] }),
                 /* @__PURE__ */ jsxs("text", { fg, children: [
-                  barStr(weeklyRemaining / 100, 8),
+                  barStr(weeklyPct / 100, 8),
                   " ",
-                  fmtPct(weeklyRemaining),
-                  " free"
+                  fmtPct(weeklyPct)
                 ] }),
                 d.weeklyReset && /* @__PURE__ */ jsxs("text", { fg: mu, children: [
                   "Reset ",

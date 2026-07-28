@@ -13,7 +13,7 @@ const CONFIG_PATHS = [
 const SETTINGS_URL = "https://ollama.com/settings"
 const USER_AGENT = "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) Gecko/20100101 Firefox/148.0"
 const SCRAPE_TIMEOUT_MS = 10_000
-const REFRESH_INTERVAL_MS = 60_000
+const REFRESH_INTERVAL_MS = 180_000
 
 // ── Cookie resolution ───────────────────────────────────────────────────────
 interface CookieResult {
@@ -66,7 +66,7 @@ interface UsageData {
   planTier?: string
 }
 
-const RETRY_DELAYS = [5_000, 15_000, 30_000] as const
+const RETRY_DELAYS = [60_000, 60_000, 60_000] as const
 
 function parseUsageFromHtml(html: string): { data?: UsageData; error?: string } {
   const usageRe = /(\d+(?:\.\d+)?)%\s*used/gi
@@ -182,13 +182,11 @@ const tui: TuiPlugin = async (api) => {
   if (init) return
   init = true
 
-  let unsub: (() => void) | undefined
   let sd: (() => void) | undefined
   let timerId: ReturnType<typeof setInterval> | undefined
   let retryTimer: ReturnType<typeof setTimeout> | undefined
 
   const cl = () => {
-    try { unsub?.() } catch {}
     try { sd?.() } catch {}
     if (timerId) clearInterval(timerId)
     if (retryTimer) clearTimeout(retryTimer)
@@ -215,6 +213,8 @@ const tui: TuiPlugin = async (api) => {
         api.kv?.get?.<boolean>(KV_EXP, true) !== false,
       )
 
+      let retryAttempt = 0
+
       async function refresh() {
         const resolved = await resolveCookie()
         if (!resolved.result) {
@@ -225,11 +225,17 @@ const tui: TuiPlugin = async (api) => {
         const scraped = await scrapeUsage(resolved.result.cookie)
         if (scraped.error) {
           setState({ kind: "error", msg: scraped.error })
-          scheduleRetry(0)
+          // Stop normal interval, start retry chain
+          if (timerId) { clearInterval(timerId); timerId = undefined }
+          scheduleRetry(retryAttempt)
+          retryAttempt++
           return
         }
 
+        retryAttempt = 0
         setState({ kind: "data", d: scraped.data! })
+        // Start normal interval if not already running
+        if (!timerId) timerId = setInterval(refresh, REFRESH_INTERVAL_MS)
       }
 
       function scheduleRetry(attempt: number) {
@@ -244,14 +250,8 @@ const tui: TuiPlugin = async (api) => {
         }, RETRY_DELAYS[attempt])
       }
 
-      // Initial fetch
+      // Initial fetch — don't start interval until first success
       refresh()
-
-      // Refresh every 60s
-      timerId = setInterval(refresh, REFRESH_INTERVAL_MS)
-
-      // Refresh on session activity too
-      unsub = api.event?.on?.("session.updated", refresh)
 
       api.slots?.register?.({
         order: 220,
@@ -298,11 +298,11 @@ const tui: TuiPlugin = async (api) => {
 
             // Data
             const d = s.d
-            const sessionRemaining = 100 - d.sessionPercent
-            const weeklyRemaining = 100 - d.weeklyPercent
+            const sessionPct = d.sessionPercent
+            const weeklyPct = d.weeklyPercent
 
-            const sessionCircle = d.sessionPercent >= 100 ? "🔴 " : d.sessionPercent >= 90 ? "🟡 " : ""
-            const weeklyCircle = d.weeklyPercent >= 100 ? "🔴 " : d.weeklyPercent >= 90 ? "🟡 " : ""
+            const sessionCircle = sessionPct >= 100 ? "🔴 " : sessionPct >= 90 ? "🟡 " : ""
+            const weeklyCircle = weeklyPct >= 100 ? "🔴 " : weeklyPct >= 90 ? "🟡 " : ""
 
             return (
               <box flexDirection="column">
@@ -316,25 +316,25 @@ const tui: TuiPlugin = async (api) => {
                   }}
                 >
                   <text fg={fg}>{e ? "▼" : "▶"} Ollama Cloud{d.planTier ? ` (${d.planTier})` : ""}</text>
-                  <text fg={fg}>{sessionCircle}{fmtPct(d.sessionPercent)}</text>
+                  <text fg={fg}>{sessionCircle}{fmtPct(sessionPct)}</text>
                 </box>
                 {e && (
                   <box flexDirection="column">
                     <box flexDirection="row" justifyContent="space-between">
                       <text fg={fg}>{sessionCircle}Session</text>
-                      <text fg={fg}>{fmtPct(d.sessionPercent)} used</text>
+                      <text fg={fg}>{fmtPct(sessionPct)} used</text>
                     </box>
                     <text fg={fg}>
-                      {barStr(sessionRemaining / 100, 8)} {fmtPct(sessionRemaining)} free
+                      {barStr(sessionPct / 100, 8)} {fmtPct(sessionPct)}
                     </text>
                     {d.sessionReset && <text fg={mu}>Reset {fmtTime(d.sessionReset)}</text>}
 
                     <box flexDirection="row" justifyContent="space-between">
                       <text fg={fg}>{weeklyCircle}Weekly</text>
-                      <text fg={fg}>{fmtPct(d.weeklyPercent)} used</text>
+                      <text fg={fg}>{fmtPct(weeklyPct)} used</text>
                     </box>
                     <text fg={fg}>
-                      {barStr(weeklyRemaining / 100, 8)} {fmtPct(weeklyRemaining)} free
+                      {barStr(weeklyPct / 100, 8)} {fmtPct(weeklyPct)}
                     </text>
                     {d.weeklyReset && <text fg={mu}>Reset {fmtTime(d.weeklyReset)}</text>}
                   </box>
