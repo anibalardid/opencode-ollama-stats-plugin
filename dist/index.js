@@ -226,8 +226,8 @@ var tui = async (api) => {
             const d = s.d;
             const sessionPct = d.sessionPercent;
             const weeklyPct = d.weeklyPercent;
-            const sessionCircle = sessionPct >= 100 ? "\u{1F534} " : sessionPct >= 90 ? "\u{1F7E1} " : "";
-            const weeklyCircle = weeklyPct >= 100 ? "\u{1F534} " : weeklyPct >= 90 ? "\u{1F7E1} " : "";
+            const sessionCircle = sessionPct >= 80 ? "\u{1F534} " : sessionPct >= 50 ? "\u{1F7E1} " : "";
+            const weeklyCircle = weeklyPct >= 80 ? "\u{1F534} " : weeklyPct >= 50 ? "\u{1F7E1} " : "";
             return /* @__PURE__ */ jsxs("box", { flexDirection: "column", children: [
               /* @__PURE__ */ jsxs(
                 "box",

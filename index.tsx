@@ -301,8 +301,8 @@ const tui: TuiPlugin = async (api) => {
             const sessionPct = d.sessionPercent
             const weeklyPct = d.weeklyPercent
 
-            const sessionCircle = sessionPct >= 100 ? "🔴 " : sessionPct >= 90 ? "🟡 " : ""
-            const weeklyCircle = weeklyPct >= 100 ? "🔴 " : weeklyPct >= 90 ? "🟡 " : ""
+            const sessionCircle = sessionPct >= 80 ? "🔴 " : sessionPct >= 50 ? "🟡 " : ""
+            const weeklyCircle = weeklyPct >= 80 ? "🔴 " : weeklyPct >= 50 ? "🟡 " : ""
 
             return (
               <box flexDirection="column">
