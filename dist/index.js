@@ -78,9 +78,45 @@ function parseUsageFromHtml(html) {
     }
   };
 }
+async function resolveIPv4(host) {
+  const g = globalThis;
+  try {
+    if (g.Bun?.dns?.lookup) {
+      const res = await g.Bun.dns.lookup(host);
+      const a = res?.find?.((r) => r.family === 4);
+      if (a?.address) return a.address;
+    }
+  } catch {
+  }
+  try {
+    const dns = await import("dns/promises");
+    const res = await dns.lookup(host, { family: 4 });
+    if (res?.address) return res.address;
+  } catch {
+  }
+  return void 0;
+}
+async function fetchWithIPv4Fallback(url, init2) {
+  try {
+    return await fetch(url, init2);
+  } catch (err) {
+    const host = new URL(url).hostname;
+    const ip = await resolveIPv4(host);
+    if (!ip) throw err;
+    const u = new URL(url);
+    const headers = new Headers(init2.headers);
+    headers.set("Host", host);
+    return await fetch(`https://${ip}${u.pathname}${u.search}`, {
+      ...init2,
+      headers,
+      // @ts-ignore Bun-specific: keep TLS SNI/hostname verification on the real host
+      tls: { serverName: host }
+    });
+  }
+}
 async function scrapeUsage(cookie) {
   try {
-    const resp = await fetch(SETTINGS_URL, {
+    const resp = await fetchWithIPv4Fallback(SETTINGS_URL, {
       method: "GET",
       headers: {
         "User-Agent": USER_AGENT,
@@ -176,13 +212,10 @@ var tui = async (api) => {
       }
       function scheduleRetry(attempt) {
         if (retryTimer) clearTimeout(retryTimer);
-        if (attempt >= RETRY_DELAYS.length) return;
+        const delay = attempt < RETRY_DELAYS.length ? RETRY_DELAYS[attempt] : REFRESH_INTERVAL_MS;
         retryTimer = setTimeout(() => {
-          refresh().then(() => {
-            if (timerId) clearInterval(timerId);
-            timerId = setInterval(refresh, REFRESH_INTERVAL_MS);
-          });
-        }, RETRY_DELAYS[attempt]);
+          refresh();
+        }, delay);
       }
       refresh();
       api.slots?.register?.({

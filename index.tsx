@@ -118,9 +118,51 @@ function parseUsageFromHtml(html: string): { data?: UsageData; error?: string } 
   }
 }
 
+// ── Network helpers ──────────────────────────────────────────────────────────
+// This machine has no global IPv6 route (only a link-local Tailscale tunnel).
+// If a provider ever publishes AAAA records, OpenCode's embedded Bun fetch can
+// pick the IPv6 address and fail with "Unable to connect" instead of falling
+// back to IPv4. On any fetch failure we resolve an A record and retry pinned to
+// that IPv4 address (Host header + TLS SNI preserved).
+async function resolveIPv4(host: string): Promise<string | undefined> {
+  const g = globalThis as any
+  try {
+    if (g.Bun?.dns?.lookup) {
+      const res = await g.Bun.dns.lookup(host)
+      const a = res?.find?.((r: { family: number; address: string }) => r.family === 4)
+      if (a?.address) return a.address
+    }
+  } catch {}
+  try {
+    const dns = await import("node:dns/promises")
+    const res = await dns.lookup(host, { family: 4 })
+    if (res?.address) return res.address
+  } catch {}
+  return undefined
+}
+
+async function fetchWithIPv4Fallback(url: string, init: RequestInit): Promise<Response> {
+  try {
+    return await fetch(url, init)
+  } catch (err) {
+    const host = new URL(url).hostname
+    const ip = await resolveIPv4(host)
+    if (!ip) throw err
+    const u = new URL(url)
+    const headers = new Headers(init.headers)
+    headers.set("Host", host)
+    return await fetch(`https://${ip}${u.pathname}${u.search}`, {
+      ...init,
+      headers,
+      // @ts-ignore Bun-specific: keep TLS SNI/hostname verification on the real host
+      tls: { serverName: host },
+    })
+  }
+}
+
 async function scrapeUsage(cookie: string): Promise<{ data?: UsageData; error?: string }> {
   try {
-    const resp = await fetch(SETTINGS_URL, {
+    const resp = await fetchWithIPv4Fallback(SETTINGS_URL, {
       method: "GET",
       headers: {
         "User-Agent": USER_AGENT,
@@ -240,14 +282,13 @@ const tui: TuiPlugin = async (api) => {
 
       function scheduleRetry(attempt: number) {
         if (retryTimer) clearTimeout(retryTimer)
-        if (attempt >= RETRY_DELAYS.length) return
+        // Retry fast for the first few attempts, then keep retrying at the
+        // normal refresh cadence forever — so the panel self-heals once the
+        // network recovers instead of staying stuck on the error state.
+        const delay = attempt < RETRY_DELAYS.length ? RETRY_DELAYS[attempt] : REFRESH_INTERVAL_MS
         retryTimer = setTimeout(() => {
-          refresh().then(() => {
-            // On success after retry, resume normal interval
-            if (timerId) clearInterval(timerId)
-            timerId = setInterval(refresh, REFRESH_INTERVAL_MS)
-          })
-        }, RETRY_DELAYS[attempt])
+          refresh()
+        }, delay)
       }
 
       // Initial fetch — don't start interval until first success
